@@ -39,10 +39,17 @@ jobs:
           fi
 
           git fetch origin "${BASE_SHA}" --depth=1 2>/dev/null || true
-          CHANGED=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || true)
 
           PROTECTED_FILES="AGENTS.md"
           PROTECTED_DIRS=".github/workflows"
+
+          # Net diff base→HEAD (catches normal changes)
+          CHANGED_NET=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || true)
+
+          # Per-commit file list base..HEAD (catches add+revert in same PR)
+          CHANGED_COMMITS=$(git log --name-only --pretty=format: "${BASE_SHA}..${HEAD_SHA}" 2>/dev/null | grep -v '^$' || true)
+
+          CHANGED=$(printf '%s\n%s\n' "$CHANGED_NET" "$CHANGED_COMMITS" | sort -u | grep -v '^$')
 
           FAILED_FILES=""
 
@@ -65,11 +72,36 @@ jobs:
             exit 0
           fi
 
-          OWNER_APPROVED=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
-            --jq "[.[] | select(.user.login == \"${PLATFORM_OWNER_USERNAME}\" and .state == \"APPROVED\")] | length")
+          # Find the most recent commit in this PR that touched a protected file
+          LAST_PROTECTED_SHA=""
+          for commit in $(git log --pretty=format:"%H" "${BASE_SHA}..${HEAD_SHA}"); do
+            commit_files=$(git diff-tree --no-commit-id -r --name-only "$commit" 2>/dev/null || true)
+            FOUND=false
+            for f in $PROTECTED_FILES; do
+              echo "$commit_files" | grep -qx "$f" && FOUND=true && break
+            done
+            for d in $PROTECTED_DIRS; do
+              echo "$commit_files" | grep -q "^${d}/" && FOUND=true && break
+            done
+            if $FOUND; then
+              LAST_PROTECTED_SHA="$commit"
+              break
+            fi
+          done
+
+          # Check Owner approval — must be on or after the last protected-file commit
+          APPROVED_COMMIT=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            --jq "[.[] | select(.user.login == \"${PLATFORM_OWNER_USERNAME}\" and .state == \"APPROVED\")] | last | .commit_id // empty")
+
+          OWNER_APPROVED=0
+          if [ -n "$APPROVED_COMMIT" ] && [ -n "$LAST_PROTECTED_SHA" ]; then
+            if git merge-base --is-ancestor "${LAST_PROTECTED_SHA}" "${APPROVED_COMMIT}" 2>/dev/null; then
+              OWNER_APPROVED=1
+            fi
+          fi
 
           if [ "${OWNER_APPROVED}" -gt 0 ]; then
-            echo "OK: Owner (${PLATFORM_OWNER_USERNAME}) approved the PR - guard passes."
+            echo "OK: Owner (${PLATFORM_OWNER_USERNAME}) approved after the last protected file change."
             exit 0
           fi
 
