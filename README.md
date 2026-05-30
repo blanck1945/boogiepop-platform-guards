@@ -36,10 +36,27 @@ Job `check-protected-files` en stage `verify`. Falla el pipeline si alguno de es
 
 Editar la lista `PROTECTED` en `guards/protected-files.yml` en este repo. Solo mantenedores de plataforma tienen acceso de escritura acá.
 
-## Push Rules (complementario)
+## Configuración requerida en GitLab UI (por seed)
 
-Configurar en GitLab UI → Project Settings → Push Rules para los seeds:
+### Protected Branch `main` (Settings → Repository → Protected Branches)
 
-- **"Prevent pushing secret files"** con regex: `(AGENTS\.md|\.gitlab-ci\.yml)`
+| Campo | Valor |
+|-------|-------|
+| Allowed to merge | Developers + Maintainers |
+| Allowed to push | No one (fuerza MR) |
+| **Require pipeline to succeed** | ✅ activado |
 
-Esto rechaza el push a nivel servidor antes de que llegue al pipeline.
+Con esto el flujo queda:
+- **MR sin archivos protegidos** → guard pasa → el autor mergea solo, sin aprobación
+- **MR toca `AGENTS.md` o `.gitlab-ci.yml`** → guard falla → merge bloqueado automáticamente
+
+### Para modificar un archivo protegido (Owner)
+
+1. Ir a Settings → CI/CD → Variables del seed → agregar `BYPASS_PROTECTED_FILES_CHECK=1`
+2. Pushear el cambio en una MR → guard pasa
+3. Revisar y mergear
+4. Borrar la variable
+
+### Límite conocido (GitLab Free)
+
+Push Rules por path requieren Premium. Sin ellos, alguien con acceso podría editar `.gitlab-ci.yml` para remover el `include:` y desactivar el guard. La mitigación es "Require pipeline to succeed" + revisión manual de diffs en MRs sospechosas. Para protección total a nivel servidor se necesita GitLab Premium.
