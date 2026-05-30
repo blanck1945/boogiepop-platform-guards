@@ -25,38 +25,59 @@ stages:
 
 ### `guards/protected-files.yml`
 
-Job `check-protected-files` en stage `verify`. Falla el pipeline si alguno de estos archivos fue modificado en el commit/MR:
+Job `check-protected-files` en stage `verify`. Falla el pipeline si alguno de estos archivos fue modificado en el commit/MR sin aprobación del Owner:
 
 - `AGENTS.md` — contrato de plataforma del seed
 - `.gitlab-ci.yml` — pipeline que incluye estos guards
 
-**Bypass de emergencia:** un Owner del proyecto puede setear `BYPASS_PROTECTED_FILES_CHECK=1` en Settings → CI/CD → Variables. Debe documentarse en el issue tracker.
+**Flujo cuando se toca un archivo protegido en una MR:**
+1. Pipeline falla con mensaje "requiere aprobación del Owner"
+2. Owner abre la MR y hace click en **Approve** en GitLab
+3. Re-run del pipeline → guard consulta la API → ve la aprobación → pasa → merge habilitado
 
-## Agregar archivos protegidos
+## Setup requerido (una sola vez)
 
-Editar la lista `PROTECTED` en `guards/protected-files.yml` en este repo. Solo mantenedores de plataforma tienen acceso de escritura acá.
+### 1. Crear un Group Access Token
 
-## Configuración requerida en GitLab UI (por seed)
+En **GitLab → grupo `boogiepop-phatom` → Settings → Access Tokens:**
 
-### Protected Branch `main` (Settings → Repository → Protected Branches)
+| Campo | Valor |
+|-------|-------|
+| Token name | `platform-guards-api` |
+| Role | Reporter |
+| Scopes | `read_api` |
+
+Copiar el token generado.
+
+### 2. Agregar variables CI/CD al grupo
+
+En **GitLab → grupo → Settings → CI/CD → Variables** (se heredan en todos los proyectos del grupo):
+
+| Variable | Valor | Flags |
+|----------|-------|-------|
+| `PLATFORM_API_TOKEN` | el token del paso anterior | Masked, Protected |
+| `PLATFORM_OWNER_USERNAME` | tu username de GitLab | — |
+
+Con variables a nivel grupo, todos los seeds las heredan automáticamente — no hay que configurarlas por proyecto.
+
+### 3. Configuración de rama protegida `main` (por seed)
+
+En **Settings → Repository → Protected Branches → `main`:**
 
 | Campo | Valor |
 |-------|-------|
 | Allowed to merge | Developers + Maintainers |
 | Allowed to push | No one (fuerza MR) |
-| **Require pipeline to succeed** | ✅ activado |
+| **Require a successful pipeline** | ✅ activado |
 
 Con esto el flujo queda:
 - **MR sin archivos protegidos** → guard pasa → el autor mergea solo, sin aprobación
-- **MR toca `AGENTS.md` o `.gitlab-ci.yml`** → guard falla → merge bloqueado automáticamente
+- **MR toca `AGENTS.md` o `.gitlab-ci.yml`** → guard falla → merge bloqueado → Owner aprueba en UI → re-run → guard pasa → merge habilitado
 
-### Para modificar un archivo protegido (Owner)
+## Agregar archivos protegidos
 
-1. Ir a Settings → CI/CD → Variables del seed → agregar `BYPASS_PROTECTED_FILES_CHECK=1`
-2. Pushear el cambio en una MR → guard pasa
-3. Revisar y mergear
-4. Borrar la variable
+Editar la lista `PROTECTED` en `guards/protected-files.yml` en este repo. Solo mantenedores de plataforma tienen acceso de escritura acá.
 
-### Límite conocido (GitLab Free)
+## Límite conocido (GitLab Free)
 
-Push Rules por path requieren Premium. Sin ellos, alguien con acceso podría editar `.gitlab-ci.yml` para remover el `include:` y desactivar el guard. La mitigación es "Require pipeline to succeed" + revisión manual de diffs en MRs sospechosas. Para protección total a nivel servidor se necesita GitLab Premium.
+Push Rules por path requieren Premium. Si alguien con acceso edita `.gitlab-ci.yml` y elimina el `include:` Y el job `check-ci-integrity`, los guards no corren. La mitigación es "Require pipeline to succeed" + revisión manual de diffs en MRs sospechosas.

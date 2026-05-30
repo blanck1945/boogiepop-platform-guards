@@ -6,8 +6,14 @@
 #       file: '/guards/protected-files.yml'
 #       ref: main
 #
-# Bypass de emergencia (solo Owner): setear variable CI/CD
-# BYPASS_PROTECTED_FILES_CHECK=1 en Settings → CI/CD → Variables del proyecto.
+# Variables requeridas (nivel grupo o proyecto):
+#   PLATFORM_API_TOKEN      — GitLab token con scope read_api
+#   PLATFORM_OWNER_USERNAME — username del Owner que puede aprobar
+#
+# Flujo cuando se tocan archivos protegidos en una MR:
+#   1. Guard falla con mensaje "requiere aprobación del Owner"
+#   2. Owner abre la MR y hace click en Approve
+#   3. Re-run del pipeline → guard llama la API → ve la aprobación → pasa
 
 check-protected-files:
   stage: verify
@@ -19,13 +25,7 @@ check-protected-files:
     - when: never
   script:
     - |
-      # Bypass de emergencia — solo disponible si un Owner lo setea en CI/CD Variables
-      if [ "${BYPASS_PROTECTED_FILES_CHECK:-0}" = "1" ]; then
-        echo "BYPASS activo — check salteado. Registrar motivo en el issue tracker."
-        exit 0
-      fi
-
-      apk add --no-cache git > /dev/null 2>&1
+      apk add --no-cache git curl > /dev/null 2>&1
 
       # Determinar base del diff
       if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
@@ -46,20 +46,55 @@ check-protected-files:
       .gitlab-ci.yml
       "
 
-      FAILED=0
+      FAILED_FILES=""
       for file in $PROTECTED; do
         [ -z "$file" ] && continue
         if echo "$CHANGED" | grep -qx "$file"; then
-          echo "BLOQUEADO: '$file' es un archivo protegido de plataforma."
-          FAILED=1
+          echo "PROTEGIDO: '$file' fue modificado."
+          FAILED_FILES="$FAILED_FILES $file"
         fi
       done
 
-      if [ "$FAILED" = "1" ]; then
-        echo ""
-        echo "Los archivos protegidos solo pueden ser modificados por el equipo de plataforma."
-        echo "Para solicitar un cambio, abrí un issue en boogiepop-platform-guards."
-        exit 1
+      if [ -z "$FAILED_FILES" ]; then
+        echo "OK: ningún archivo protegido fue modificado."
+        exit 0
       fi
 
-      echo "OK: ningún archivo protegido fue modificado."
+      # Hay archivos protegidos modificados — verificar aprobación del Owner
+      if [ -n "${CI_MERGE_REQUEST_IID:-}" ]; then
+        # Contexto MR: consultar API de aprobaciones
+        if [ -z "${PLATFORM_API_TOKEN:-}" ] || [ -z "${PLATFORM_OWNER_USERNAME:-}" ]; then
+          echo ""
+          echo "BLOQUEADO: archivos protegidos modificados pero PLATFORM_API_TOKEN"
+          echo "o PLATFORM_OWNER_USERNAME no están configurados en CI/CD Variables."
+          echo "Contactar al equipo de plataforma."
+          exit 1
+        fi
+
+        APPROVALS=$(curl -sf \
+          --header "PRIVATE-TOKEN: ${PLATFORM_API_TOKEN}" \
+          "https://gitlab.com/api/v4/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/approvals" \
+          2>/dev/null || echo '{}')
+
+        if echo "$APPROVALS" | grep -q "\"username\":\"${PLATFORM_OWNER_USERNAME}\""; then
+          echo "OK: Owner (${PLATFORM_OWNER_USERNAME}) aprobó la MR — guard pasa."
+          exit 0
+        fi
+
+        echo ""
+        echo "BLOQUEADO: los siguientes archivos protegidos fueron modificados:"
+        for f in $FAILED_FILES; do echo "  - $f"; done
+        echo ""
+        echo "Para desbloquear:"
+        echo "  1. Pedile al Owner que abra esta MR y haga click en 'Approve'"
+        echo "  2. Re-corré este pipeline"
+        exit 1
+      else
+        # Push directo (no MR) — bloquear siempre
+        echo ""
+        echo "BLOQUEADO: archivos protegidos modificados en push directo:"
+        for f in $FAILED_FILES; do echo "  - $f"; done
+        echo ""
+        echo "Estos archivos solo pueden modificarse via MR con aprobación del Owner."
+        exit 1
+      fi
