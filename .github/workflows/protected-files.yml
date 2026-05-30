@@ -4,8 +4,9 @@ on:
   workflow_call:
     inputs:
       owner_username:
-        required: true
+        required: false
         type: string
+        default: ""
 
 jobs:
   check-protected-files:
@@ -24,6 +25,11 @@ jobs:
           PLATFORM_OWNER_USERNAME: ${{ inputs.owner_username }}
         run: |
           set -e
+
+          if [ -z "${PLATFORM_OWNER_USERNAME}" ]; then
+            echo "ERROR: owner_username input is required but was not provided."
+            exit 1
+          fi
 
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "No es un PR — saltando check."
