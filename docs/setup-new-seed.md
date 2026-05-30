@@ -4,11 +4,78 @@ Pasos para replicar la protección completa en cualquier seed nuevo.
 
 ---
 
-## Seeds Node.js (React, Next.js, etc.)
+## Comparación por stack
+
+| | Node.js (React / Next) | Python (Streamlit) |
+|---|---|---|
+| Hook manager | **Husky** | **pre-commit** |
+| Auto-install hooks | `npm install` → `prepare` script | `make setup` |
+| Lint pre-push | `npm run lint` + `npm run build` | `ruff check .` |
+| Guard pre-commit | Warn-only (shell) | Bloquea (Python `check_protected_paths.py`) |
+| CI guard | Idéntico | Idéntico |
+| Branch protection | Idéntico | Idéntico |
+
+---
+
+## Diagrama — Node.js (Husky)
+
+```mermaid
+flowchart TD
+    A([npm install]) -->|prepare script| B[Husky instalado\nauto — sin pasos extra]
+    B --> C[.husky/pre-commit activo\n.husky/pre-push activo]
+
+    subgraph COMMIT ["git commit"]
+        C --> D{staged files\ntienen protegidos?}
+        D -->|Sí| E["⚠ Warning\ncommit continúa"]
+        D -->|No| F[commit ok]
+        E --> F
+    end
+
+    subgraph PUSH ["git push"]
+        F --> G[npm run lint]
+        G -->|falla| H[❌ Push bloqueado]
+        G -->|ok| I[npm run build]
+        I -->|falla| J[❌ Push bloqueado]
+        I -->|ok| K{commits tocan\nprotegidos?}
+        K -->|Sí| L["⚠ Warning\npush continúa"]
+        K -->|No| M[Push a GitHub]
+        L --> M
+    end
+```
+
+---
+
+## Diagrama — Python (pre-commit + Makefile)
+
+```mermaid
+flowchart TD
+    A([make setup]) --> B["pip install pre-commit ruff\npre-commit install\npre-commit install --hook-type pre-push"]
+    B --> C[Hooks activos\nuna sola vez por dev]
+
+    subgraph COMMIT ["git commit"]
+        C --> D["check_protected_paths.py\ncontra seed-protected-paths.txt"]
+        D -->|archivo protegido| E["❌ Commit bloqueado\n(no es warning, es hard block)"]
+        D -->|ok| F[commit ok]
+    end
+
+    subgraph PUSH ["git push"]
+        F --> G["ruff check .\n(via pre-commit stage: pre-push)"]
+        G -->|falla| H[❌ Push bloqueado]
+        G -->|ok| I[Push a GitHub]
+    end
+
+    subgraph SETUP_NOTE ["Nota: sin make setup"]
+        N["hooks NO se instalan\nauto — dev debe correr\nmake setup manualmente"]
+    end
+```
+
+---
+
+## Seeds Node.js — Setup completo
 
 ### 1. CI workflow
 
-Crear `.github/workflows/ci.yml`. Si el seed ya tiene un job `ci` de lint/build, agregar el job `protected-files` encima:
+Crear `.github/workflows/ci.yml`:
 
 ```yaml
 name: CI
@@ -116,7 +183,7 @@ fi
 
 ```powershell
 $token = "<GITHUB_TOKEN>"
-$repo  = "<repo-name>"   # ej: boogiepop-streamlit-seed
+$repo  = "<repo-name>"
 $headers = @{ Authorization = "Bearer $token"; Accept = "application/vnd.github+json"; "Content-Type" = "application/json" }
 $body = @{
   required_status_checks = @{
@@ -136,11 +203,11 @@ Invoke-RestMethod -Method PUT -Uri "https://api.github.com/repos/blanck1945/$rep
 
 ---
 
-## Seeds Python (Streamlit, etc.)
+## Seeds Python — Setup completo
 
 ### 1. CI workflow
 
-Idéntico al de Node.js — el job `protected-files` es agnóstico al lenguaje. Solo cambia el job `ci`:
+El job `protected-files` es idéntico. Solo cambia el job `ci`:
 
 ```yaml
 name: CI
@@ -163,62 +230,62 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements.txt
-      - run: ruff check .        # o flake8, pylint, etc.
-      - run: python -m pytest    # si hay tests
+      - run: pip install ruff
+      - run: ruff check .
 ```
 
-### 2. Hooks locales (equivalente a Husky para Python)
+### 2. pre-commit + Makefile
 
-Instalar `pre-commit`:
-
-```bash
-pip install pre-commit
-```
-
-Crear `.pre-commit-config.yaml`:
+Agregar a `.pre-commit-config.yaml`:
 
 ```yaml
 repos:
   - repo: local
     hooks:
-      - id: warn-protected-files
-        name: warn protected files
-        language: script
-        entry: .hooks/warn-protected-files.sh
-        always_run: true
+      - id: protect-seed-paths-local
+        name: Validar infra seed (lista maintainers/)
+        language: python
+        entry: python scripts/pre_commit_seed_guard_wrapper.py
         pass_filenames: false
+        always_run: true
 
-      - id: pre-push-checks
-        name: lint + test
-        language: script
-        entry: .hooks/pre-push-checks.sh
-        stages: [push]
-        always_run: true
-        pass_filenames: false
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.13
+    hooks:
+      - id: ruff
+        name: lint (ruff) — pre-push
+        args: [--fix]
+        stages: [pre-push]
 ```
 
-Crear `.hooks/warn-protected-files.sh` (mismo contenido que el pre-commit de Node).
+Agregar `AGENTS.md` a `maintainers/seed-protected-paths.txt`.
 
-Crear `.hooks/pre-push-checks.sh` con los comandos de lint/test del proyecto Python.
+Crear `Makefile`:
 
-Activar los hooks:
+```makefile
+.PHONY: setup lint
 
-```bash
-pre-commit install
-pre-commit install --hook-type pre-push
+setup:
+	pip install pre-commit ruff
+	pre-commit install
+	pre-commit install --hook-type pre-push
+
+lint:
+	ruff check .
 ```
+
+> El dev corre `make setup` una sola vez al clonar el repo. Sin esto, los hooks no se activan (no hay equivalente al `prepare` de npm).
 
 ### 3. Branch protection
 
-Idéntico al de Node.js — misma API, mismo script PowerShell.
+Idéntico al de Node.js — mismo script PowerShell.
 
 ---
 
 ## Checklist por seed
 
 - [ ] `.github/workflows/ci.yml` con job `protected-files`
-- [ ] Hooks locales instalados y funcionando
-- [ ] `package.json` con `"prepare": "husky"` (Node) o `.pre-commit-config.yaml` (Python)
-- [ ] Branch protection configurada: required check + enforce_admins + dismiss_stale_reviews
+- [ ] Hook manager configurado: Husky (`prepare` en package.json) o pre-commit (`Makefile`)
+- [ ] `AGENTS.md` en la lista de archivos protegidos
+- [ ] Branch protection: required check + `enforce_admins` + `dismiss_stale_reviews`
 - [ ] Verificar nombre exacto del check: `GET /repos/{owner}/{repo}/commits/{sha}/check-runs`
