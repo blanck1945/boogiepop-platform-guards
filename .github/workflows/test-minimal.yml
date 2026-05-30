@@ -2,9 +2,14 @@ name: Test Minimal Reusable
 
 on:
   workflow_call:
+    inputs:
+      owner_username:
+        required: false
+        type: string
+        default: "nobody"
 
 jobs:
   hello:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "reusable workflow works"
+      - run: echo "reusable workflow works, owner=${{ inputs.owner_username }}"
