@@ -45,18 +45,21 @@ flowchart TD
 
     subgraph SERVER ["☁ Servidor — GitHub CI + Branch Protection"]
         PUSH --> PR[Abrir PR]
-        PR --> CI["CI corre\nprotected-files job"]
+        PR --> CI["CI corre:\ncada commit es inspeccionado\n(no solo diff neto base→HEAD)"]
 
         CI --> DEL{ci.yml fue\neliminado?}
         DEL -->|Sí| STUCK["⏳ Check nunca reporta\n❌ Merge bloqueado para siempre"]
 
-        DEL -->|No| PROT{PR toca\narchivos protegidos?}
+        DEL -->|No| PROT{algún commit del PR\ntocó archivos protegidos?}
         PROT -->|No| PASS["✅ Check pasa\nMerge habilitado"]
-        PROT -->|Sí| APR{Owner aprobó el PR?}
+        PROT -->|Sí| APR{"Owner aprobó DESPUÉS\ndel último commit protegido?"}
         APR -->|No| BLOCK["❌ Merge bloqueado"]
-        BLOCK --> OA["Owner aprueba + re-run del job"]
+        BLOCK --> OA["Owner aprueba el PR\n+ re-run del job"]
         OA --> APR
-        APR -->|Sí| PASS
+        APR -->|Sí| STALE{nuevo commit\ndespués del approve?}
+        STALE -->|Sí| DISMISS["Aprobación descartada\nauto. por dismiss_stale_reviews"]
+        DISMISS --> APR
+        STALE -->|No| PASS
     end
 
     PASS --> MERGE([✅ Merge a main])
@@ -85,16 +88,40 @@ jobs:
 
 ### 2. Branch protection en `main`
 
-Vía API o Settings → Branches → Edit `main`:
+Configuración requerida (vía API o Settings → Branches):
 
-- **Require status checks to pass** → agregar `protected-files / check-protected-files`
-- **Require branches to be up to date** → activado
-- **Do not allow bypassing the above settings** → activado (`enforce_admins: true`)
+| Setting | Valor |
+|---------|-------|
+| Require status checks | `protected-files / check-protected-files` |
+| Require branches to be up to date | ✅ |
+| Dismiss stale reviews on new push | ✅ (`dismiss_stale_reviews: true`) |
+| Do not allow bypassing | ✅ (`enforce_admins: true`) |
 
-> El nombre exacto del check se puede verificar con:
+> El nombre exacto del check se puede verificar vía:
 > `GET /repos/{owner}/{repo}/commits/{sha}/check-runs`
 
-### 3. Husky hooks (pre-commit y pre-push)
+Script de setup vía API:
+
+```powershell
+$token = "<GITHUB_TOKEN>"
+$headers = @{ Authorization = "Bearer $token"; Accept = "application/vnd.github+json"; "Content-Type" = "application/json" }
+$body = @{
+  required_status_checks = @{
+    strict   = $true
+    contexts = @("protected-files / check-protected-files")
+  }
+  enforce_admins = $true
+  required_pull_request_reviews = @{
+    dismiss_stale_reviews           = $true
+    require_last_push_approval      = $false
+    required_approving_review_count = 0
+  }
+  restrictions = $null
+} | ConvertTo-Json -Depth 5
+Invoke-RestMethod -Method PUT -Uri "https://api.github.com/repos/{owner}/{repo}/branches/main/protection" -Headers $headers -Body $body
+```
+
+### 3. Husky hooks
 
 Instalar Husky en el proyecto:
 
@@ -216,7 +243,7 @@ Sin Push Rules (Premium), si alguien elimina el `include:` y el job local `check
 
 ## Agregar archivos protegidos
 
-Editar la lista `PROTECTED_FILES` / `PROTECTED_DIRS` en:
+Editar `PROTECTED_FILES` / `PROTECTED_DIRS` en:
 - GitHub: `.github/workflows/protected-files.yml`
 - GitLab: `guards/protected-files.yml`
 
