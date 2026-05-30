@@ -23,26 +23,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PLATFORM_OWNER_USERNAME: ${{ inputs.owner_username }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
           set -e
 
           if [ -z "${PLATFORM_OWNER_USERNAME}" ]; then
-            echo "ERROR: owner_username input is required but was not provided."
+            echo "ERROR: owner_username input is required."
             exit 1
           fi
 
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "No es un PR — saltando check."
+          if [ "${EVENT_NAME}" != "pull_request" ]; then
+            echo "Not a PR - skipping check."
             exit 0
           fi
 
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
-          REPO="${{ github.repository }}"
-
-          git fetch origin "$BASE_SHA" --depth=1 2>/dev/null || true
-          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)
+          git fetch origin "${BASE_SHA}" --depth=1 2>/dev/null || true
+          CHANGED=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || true)
 
           PROTECTED_FILES="AGENTS.md"
           PROTECTED_DIRS=".github/workflows"
@@ -51,20 +51,20 @@ jobs:
 
           for file in $PROTECTED_FILES; do
             if echo "$CHANGED" | grep -qx "$file"; then
-              echo "PROTEGIDO: '$file' fue modificado."
+              echo "PROTECTED: '$file' was modified."
               FAILED_FILES="$FAILED_FILES $file"
             fi
           done
 
           for dir in $PROTECTED_DIRS; do
             if echo "$CHANGED" | grep -q "^${dir}/"; then
-              echo "PROTEGIDO: archivos en '${dir}/' fueron modificados."
+              echo "PROTECTED: files in '${dir}/' were modified."
               FAILED_FILES="$FAILED_FILES ${dir}/"
             fi
           done
 
           if [ -z "$FAILED_FILES" ]; then
-            echo "OK: ningún archivo protegido fue modificado."
+            echo "OK: no protected files were modified."
             exit 0
           fi
 
@@ -72,15 +72,15 @@ jobs:
             --jq "[.[] | select(.user.login == \"${PLATFORM_OWNER_USERNAME}\" and .state == \"APPROVED\")] | length")
 
           if [ "${OWNER_APPROVED}" -gt 0 ]; then
-            echo "OK: Owner (${PLATFORM_OWNER_USERNAME}) aprobó el PR — guard pasa."
+            echo "OK: Owner (${PLATFORM_OWNER_USERNAME}) approved the PR - guard passes."
             exit 0
           fi
 
           echo ""
-          echo "BLOQUEADO: los siguientes archivos protegidos fueron modificados:"
+          echo "BLOCKED: the following protected files were modified:"
           for f in $FAILED_FILES; do echo "  - $f"; done
           echo ""
-          echo "Para desbloquear:"
-          echo "  1. Pedile al Owner que apruebe este PR (click 'Review changes → Approve' en GitHub)"
-          echo "  2. Re-corré este workflow (o pusheá un commit vacío)"
+          echo "To unblock:"
+          echo "  1. Ask the Owner to approve this PR (Review changes -> Approve on GitHub)"
+          echo "  2. Re-run this workflow (or push an empty commit)"
           exit 1
