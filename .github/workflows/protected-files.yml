@@ -1,26 +1,11 @@
-# Reusable workflow: archivos protegidos de plataforma
-#
-# Llamar desde los proyectos con:
-#   jobs:
-#     protected-files:
-#       uses: boogiepop-phatom/boogiepop-platform-guards/.github/workflows/protected-files.yml@main
-#       secrets: inherit
-#
-# Secrets requeridos (Organization secrets):
-#   PLATFORM_OWNER_USERNAME — GitHub login del Owner que puede aprobar
-#
-# Setup en cada proyecto:
-#   Branch protection main → "Require status checks" →
-#   agregar "check-protected-files / check-protected-files"
-#   Si alguien elimina el `uses:` → check queda "missing" → merge bloqueado igual.
-
 name: Protected Files Guard
 
 on:
   workflow_call:
-    secrets:
-      PLATFORM_OWNER_USERNAME:
-        required: false
+    inputs:
+      owner_username:
+        required: true
+        type: string
 
 jobs:
   check-protected-files:
@@ -36,7 +21,7 @@ jobs:
       - name: Check protected files and owner approval
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_OWNER_USERNAME: ${{ secrets.PLATFORM_OWNER_USERNAME }}
+          PLATFORM_OWNER_USERNAME: ${{ inputs.owner_username }}
         run: |
           set -e
 
@@ -53,7 +38,6 @@ jobs:
           git fetch origin "$BASE_SHA" --depth=1 2>/dev/null || true
           CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)
 
-          # Archivos/directorios protegidos — modificar solo en este repo (platform-guards)
           PROTECTED_FILES="AGENTS.md"
           PROTECTED_DIRS=".github/workflows"
 
@@ -78,7 +62,6 @@ jobs:
             exit 0
           fi
 
-          # Verificar aprobación del Owner via GitHub Reviews API
           OWNER_APPROVED=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
             --jq "[.[] | select(.user.login == \"${PLATFORM_OWNER_USERNAME}\" and .state == \"APPROVED\")] | length")
 
