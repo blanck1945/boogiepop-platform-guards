@@ -1,4 +1,4 @@
-name: Test With Input And Permissions
+name: Test With Input No Permissions
 
 on:
   workflow_call:
@@ -11,9 +11,6 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
