@@ -1,0 +1,65 @@
+# Guard: archivos protegidos de plataforma
+#
+# Incluir desde los seeds con:
+#   include:
+#     - project: '<namespace>/boogiepop-platform-guards'
+#       file: '/guards/protected-files.yml'
+#       ref: main
+#
+# Bypass de emergencia (solo Owner): setear variable CI/CD
+# BYPASS_PROTECTED_FILES_CHECK=1 en Settings → CI/CD → Variables del proyecto.
+
+check-protected-files:
+  stage: verify
+  image: alpine:3.19
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: never
+  script:
+    - |
+      # Bypass de emergencia — solo disponible si un Owner lo setea en CI/CD Variables
+      if [ "${BYPASS_PROTECTED_FILES_CHECK:-0}" = "1" ]; then
+        echo "BYPASS activo — check salteado. Registrar motivo en el issue tracker."
+        exit 0
+      fi
+
+      apk add --no-cache git > /dev/null 2>&1
+
+      # Determinar base del diff
+      if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
+        BASE_SHA="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+      elif [ "${CI_COMMIT_BEFORE_SHA:-}" = "0000000000000000000000000000000000000000" ] || [ -z "${CI_COMMIT_BEFORE_SHA:-}" ]; then
+        echo "Primer commit o SHA anterior desconocido — saltando check."
+        exit 0
+      else
+        BASE_SHA="$CI_COMMIT_BEFORE_SHA"
+      fi
+
+      git fetch origin "$BASE_SHA" --depth=1 > /dev/null 2>&1 || true
+      CHANGED=$(git diff --name-only "$BASE_SHA" "$CI_COMMIT_SHA" 2>/dev/null || true)
+
+      # Archivos protegidos — modificar esta lista solo en este repo (platform-guards)
+      PROTECTED="
+      AGENTS.md
+      .gitlab-ci.yml
+      "
+
+      FAILED=0
+      for file in $PROTECTED; do
+        [ -z "$file" ] && continue
+        if echo "$CHANGED" | grep -qx "$file"; then
+          echo "BLOQUEADO: '$file' es un archivo protegido de plataforma."
+          FAILED=1
+        fi
+      done
+
+      if [ "$FAILED" = "1" ]; then
+        echo ""
+        echo "Los archivos protegidos solo pueden ser modificados por el equipo de plataforma."
+        echo "Para solicitar un cambio, abrí un issue en boogiepop-platform-guards."
+        exit 1
+      fi
+
+      echo "OK: ningún archivo protegido fue modificado."
