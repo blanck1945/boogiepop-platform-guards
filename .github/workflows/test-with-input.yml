@@ -1,14 +1,26 @@
-name: Test With Input
+name: Test With Input And Permissions
 
 on:
   workflow_call:
     inputs:
       owner_username:
-        required: true
+        required: false
         type: string
+        default: ""
 
 jobs:
-  hello:
+  check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - run: echo "input received: ${{ inputs.owner_username }}"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Print input
+        env:
+          OWNER: ${{ inputs.owner_username }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "owner=$OWNER event=$EVENT"
