@@ -20,7 +20,7 @@ on:
   workflow_call:
     secrets:
       PLATFORM_OWNER_USERNAME:
-        required: true
+        required: false
 
 jobs:
   check-protected-files:
