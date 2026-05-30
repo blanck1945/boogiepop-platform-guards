@@ -1,0 +1,97 @@
+# Reusable workflow: archivos protegidos de plataforma
+#
+# Llamar desde los proyectos con:
+#   jobs:
+#     protected-files:
+#       uses: boogiepop-phatom/boogiepop-platform-guards/.github/workflows/protected-files.yml@main
+#       secrets: inherit
+#
+# Secrets requeridos (Organization secrets):
+#   PLATFORM_OWNER_USERNAME — GitHub login del Owner que puede aprobar
+#
+# Setup en cada proyecto:
+#   Branch protection main → "Require status checks" →
+#   agregar "check-protected-files / check-protected-files"
+#   Si alguien elimina el `uses:` → check queda "missing" → merge bloqueado igual.
+
+name: Protected Files Guard
+
+on:
+  workflow_call:
+    secrets:
+      PLATFORM_OWNER_USERNAME:
+        required: true
+
+jobs:
+  check-protected-files:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check protected files and owner approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM_OWNER_USERNAME: ${{ secrets.PLATFORM_OWNER_USERNAME }}
+        run: |
+          set -e
+
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "No es un PR — saltando check."
+            exit 0
+          fi
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          git fetch origin "$BASE_SHA" --depth=1 2>/dev/null || true
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)
+
+          # Archivos/directorios protegidos — modificar solo en este repo (platform-guards)
+          PROTECTED_FILES="AGENTS.md"
+          PROTECTED_DIRS=".github/workflows"
+
+          FAILED_FILES=""
+
+          for file in $PROTECTED_FILES; do
+            if echo "$CHANGED" | grep -qx "$file"; then
+              echo "PROTEGIDO: '$file' fue modificado."
+              FAILED_FILES="$FAILED_FILES $file"
+            fi
+          done
+
+          for dir in $PROTECTED_DIRS; do
+            if echo "$CHANGED" | grep -q "^${dir}/"; then
+              echo "PROTEGIDO: archivos en '${dir}/' fueron modificados."
+              FAILED_FILES="$FAILED_FILES ${dir}/"
+            fi
+          done
+
+          if [ -z "$FAILED_FILES" ]; then
+            echo "OK: ningún archivo protegido fue modificado."
+            exit 0
+          fi
+
+          # Verificar aprobación del Owner via GitHub Reviews API
+          OWNER_APPROVED=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+            --jq "[.[] | select(.user.login == \"${PLATFORM_OWNER_USERNAME}\" and .state == \"APPROVED\")] | length")
+
+          if [ "${OWNER_APPROVED}" -gt 0 ]; then
+            echo "OK: Owner (${PLATFORM_OWNER_USERNAME}) aprobó el PR — guard pasa."
+            exit 0
+          fi
+
+          echo ""
+          echo "BLOQUEADO: los siguientes archivos protegidos fueron modificados:"
+          for f in $FAILED_FILES; do echo "  - $f"; done
+          echo ""
+          echo "Para desbloquear:"
+          echo "  1. Pedile al Owner que apruebe este PR (click 'Review changes → Approve' en GitHub)"
+          echo "  2. Re-corré este workflow (o pusheá un commit vacío)"
+          exit 1
